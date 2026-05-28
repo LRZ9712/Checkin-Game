@@ -1,0 +1,60 @@
+{
+    "admin_qq": {
+        "description": "管理员 QQ 列表",
+        "type": "list",
+        "item_type": "string",
+        "default": [
+            "2442262339"
+        ],
+        "hint": "拥有修改积分权限的管理员 QQ 号。回车添加多个。"
+    },
+    "enabled_groups": {
+        "description": "指定启用的群聊",
+        "type": "list",
+        "item_type": "string",
+        "default": [],
+        "hint": "允许使用此插件的群聊QQ号。留空则表示默认在【所有群聊】均开启。"
+    },
+    "rob_fail_rate": {
+        "description": "抢劫失败概率",
+        "type": "float",
+        "default": 0.4,
+        "hint": "填写 0.0 到 1.0 之间的小数。0.4 表示有 40% 的几率失败摔跤。"
+    },
+    "rob_min_points": {
+        "description": "抢劫保底积分",
+        "type": "int",
+        "default": 1,
+        "hint": "抢劫成功后，至少能抢到的积分数。"
+    },
+    "rob_max_points": {
+        "description": "抢劫最高积分",
+        "type": "int",
+        "default": 8,
+        "hint": "抢劫成功后，最多能抢到的积分数。"
+    },
+    "intervene_fail_rate": {
+        "description": "行侠仗义失败概率",
+        "type": "float",
+        "default": 0.4,
+        "hint": "填写 0.0 到 1.0 之间的小数。0.4 表示大侠有 40% 的几率被打趴下。"
+    },
+    "hero_reward_points": {
+        "description": "行侠仗义成功奖励",
+        "type": "int",
+        "default": 3,
+        "hint": "大侠成功阻止抢劫后，系统发放的积分奖励。"
+    },
+    "intervene_penalty_normal": {
+        "description": "普通劫匪被抓罚款",
+        "type": "int",
+        "default": 10,
+        "hint": "普通劫匪被行侠仗义击败后，扣除的积分数。"
+    },
+    "intervene_penalty_red_name": {
+        "description": "通缉犯被抓罚款",
+        "type": "int",
+        "default": 20,
+        "hint": "红名通缉犯被行侠仗义击败后，加倍扣除的积分数。"
+    }
+}
