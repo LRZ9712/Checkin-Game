@@ -22,7 +22,7 @@ from astrbot.api.all import *
 from astrbot.api.event import filter
 from astrbot.api.message_components import At, Plain
 
-@register("checkin_game", "Author", "群签到与经济抢劫插件(经济严谨版)", "1.7.3")
+@register("checkin_game", "Author", "群签到与经济抢劫插件(动态配置直连版)", "1.7.5")
 class CheckinGamePlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -33,9 +33,19 @@ class CheckinGamePlugin(Star):
         # 字体文件路径
         self.font_path = os.path.join(self.plugin_dir, "AlibabaPuHuiTi-2-65-Medium.ttf")
         
-        self.config = self.load_config()
         self.users_data = self.load_data()
         self.active_robberies = {}
+
+    def get_cfg(self):
+        """动态获取最新配置，绝对优先读取 AstrBot 控制台原生配置"""
+        try:
+            cfg = self.get_config()
+            if cfg and isinstance(cfg, dict):
+                return cfg
+        except:
+            pass
+        # 如果框架没提供，才保底读取本地旧的 config.json
+        return self.load_config()
 
     def load_data(self):
         if os.path.exists(self.data_file):
@@ -54,6 +64,7 @@ class CheckinGamePlugin(Star):
         default_config = {
             "admin_qq": ["2442262339"],
             "enabled_groups": [], 
+            "disabled_groups": [],
             "rob_fail_rate": 0.4, 
             "intervene_fail_rate": 0.4,
             "rob_min_points": 1, 
@@ -80,11 +91,21 @@ class CheckinGamePlugin(Star):
         return default_config
 
     def is_group_enabled(self, group_id):
-        self.config = self.load_config()
-        enabled_groups = self.config.get("enabled_groups", [])
-        if not enabled_groups: 
-            return True
-        return str(group_id) in enabled_groups
+        cfg = self.get_cfg()
+        enabled_groups = cfg.get("enabled_groups", [])
+        disabled_groups = cfg.get("disabled_groups", [])
+        group_id_str = str(group_id)
+
+        # 规则1：如果白名单有内容，则绝对优先，完全忽略黑名单
+        if enabled_groups:
+            return group_id_str in enabled_groups
+            
+        # 规则2：如果白名单为空，但黑名单有内容，则执行黑名单模式
+        if disabled_groups:
+            return group_id_str not in disabled_groups
+            
+        # 规则3：黑白名单都为空，默认全部开启
+        return True
 
     def get_user(self, group_id, user_id, user_name=""):
         group_id = str(group_id)
@@ -592,13 +613,13 @@ class CheckinGamePlugin(Star):
         robber_data["last_rob_date"] = today_str
         self.save_data()
 
-        self.config = self.load_config()
-        if random.random() < self.config.get("rob_fail_rate", 0.4):
+        cfg = self.get_cfg()
+        if random.random() < cfg.get("rob_fail_rate", 0.4):
             yield event.plain_result(f"【抢劫失败】{robber_name} 试图抢劫，但脚底打滑摔了一跤！")
             return
             
         # === 核心经济平衡：抢劫金额受限于受害者的余额 ===
-        raw_steal = random.randint(self.config.get("rob_min_points", 1), self.config.get("rob_max_points", 8))
+        raw_steal = random.randint(cfg.get("rob_min_points", 1), cfg.get("rob_max_points", 8))
         steal_points = min(raw_steal, target_data["points"])
 
         if raw_steal > steal_points:
@@ -657,8 +678,8 @@ class CheckinGamePlugin(Star):
         robber_data = self.get_user(group_id, rob_data["robber_id"])
         hero_user_data = self.get_user(group_id, hero_id, hero_name)
         
-        self.config = self.load_config()
-        if random.random() < self.config.get("intervene_fail_rate", 0.4):
+        cfg = self.get_cfg()
+        if random.random() < cfg.get("intervene_fail_rate", 0.4):
             target_data = self.get_user(group_id, rob_data["target_id"])
             
             # 受害者被抢走积分
@@ -667,7 +688,7 @@ class CheckinGamePlugin(Star):
             target_data["points"] = max(0, target_data["points"] - actual_steal)
             
             # === 核心经济平衡：大侠被反抢金额受限于大侠自身余额 ===
-            hero_loss = random.randint(self.config.get("rob_min_points", 1), self.config.get("rob_max_points", 8))
+            hero_loss = random.randint(cfg.get("rob_min_points", 1), cfg.get("rob_max_points", 8))
             actual_hero_loss = min(hero_loss, hero_user_data["points"])
             
             robber_data["points"] += actual_hero_loss
@@ -691,16 +712,16 @@ class CheckinGamePlugin(Star):
             del self.active_robberies[group_id]
             
             if robber_data["is_red_name"]:
-                penalty = self.config.get("intervene_penalty_red_name", 20)
+                penalty = cfg.get("intervene_penalty_red_name", 20)
                 tag = "【红名通缉犯】"
             else:
-                penalty = self.config.get("intervene_penalty_normal", 10)
+                penalty = cfg.get("intervene_penalty_normal", 10)
                 tag = "【普通劫匪】"
                 
             # 扣除劫匪罚金 (系统销毁)
             robber_data["points"] = max(0, robber_data["points"] - penalty)
             # 大侠获得系统奖励 (系统增发)
-            hero_reward = self.config.get("hero_reward_points", 3)
+            hero_reward = cfg.get("hero_reward_points", 3)
             hero_user_data["points"] += hero_reward
             self.save_data()
             
@@ -740,9 +761,9 @@ class CheckinGamePlugin(Star):
             return
 
         sender_id = str(event.get_sender_id())
-        self.config = self.load_config()
+        cfg = self.get_cfg()
         
-        if sender_id not in self.config.get("admin_qq", []):
+        if sender_id not in cfg.get("admin_qq", []):
             yield event.plain_result("🚫 权限不足！只有系统管理员可以修改积分。")
             return
             
@@ -785,9 +806,9 @@ class CheckinGamePlugin(Star):
             return
 
         sender_id = str(event.get_sender_id())
-        self.config = self.load_config()
+        cfg = self.get_cfg()
         
-        if sender_id not in self.config.get("admin_qq", []):
+        if sender_id not in cfg.get("admin_qq", []):
             yield event.plain_result("🚫 权限不足！只有系统管理员可以修改积分。")
             return
             
