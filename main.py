@@ -8,10 +8,10 @@ import re
 from datetime import datetime, timedelta
 from io import BytesIO
 
-# 引入轻量级绘图库、裁剪工具和滤镜(用于生成阴影)
+# 引入轻量级绘图库、裁剪工具和滤镜
 from PIL import Image as PILImage, ImageDraw, ImageFont, ImageOps, ImageFilter
 
-# 尝试导入表情渲染库
+# 尝试导入表情渲染库 (仅在非并发单人场景尝试使用，以防卡死)
 try:
     from pilmoji import Pilmoji
     HAS_PILMOJI = True
@@ -22,30 +22,18 @@ from astrbot.api.all import *
 from astrbot.api.event import filter
 from astrbot.api.message_components import At, Plain
 
-@register("checkin_game", "Author", "群签到与经济抢劫插件(动态配置直连版)", "1.7.5")
+@register("checkin_game", "Author", "群签到与经济抢劫插件(直连控制台通关版)", "1.7.8")
 class CheckinGamePlugin(Star):
-    def __init__(self, context: Context):
+    # 🔑 核心修复：正确接收 AstrBot 官方 WebUI 传入的实时 config 字典
+    def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self.plugin_dir = os.path.dirname(__file__)
         self.data_file = os.path.join(self.plugin_dir, "data.json")
-        self.config_file = os.path.join(self.plugin_dir, "config.json")
-        
-        # 字体文件路径
         self.font_path = os.path.join(self.plugin_dir, "AlibabaPuHuiTi-2-65-Medium.ttf")
         
+        self.config = config or {}
         self.users_data = self.load_data()
         self.active_robberies = {}
-
-    def get_cfg(self):
-        """动态获取最新配置，绝对优先读取 AstrBot 控制台原生配置"""
-        try:
-            cfg = self.get_config()
-            if cfg and isinstance(cfg, dict):
-                return cfg
-        except:
-            pass
-        # 如果框架没提供，才保底读取本地旧的 config.json
-        return self.load_config()
 
     def load_data(self):
         if os.path.exists(self.data_file):
@@ -60,43 +48,13 @@ class CheckinGamePlugin(Star):
         with open(self.data_file, "w", encoding="utf-8") as f:
             json.dump(self.users_data, f, ensure_ascii=False, indent=2)
 
-    def load_config(self):
-        default_config = {
-            "admin_qq": ["2442262339"],
-            "enabled_groups": [], 
-            "disabled_groups": [],
-            "rob_fail_rate": 0.4, 
-            "intervene_fail_rate": 0.4,
-            "rob_min_points": 1, 
-            "rob_max_points": 8,
-            "intervene_penalty_normal": 10,
-            "intervene_penalty_red_name": 20,
-            "hero_reward_points": 3
-        }
-        if os.path.exists(self.config_file):
-            with open(self.config_file, "r", encoding="utf-8") as f:
-                config = json.load(f)
-                updated = False
-                for k, v in default_config.items():
-                    if k not in config:
-                        config[k] = v
-                        updated = True
-                if updated:
-                    with open(self.config_file, "w", encoding="utf-8") as fw:
-                        json.dump(config, fw, ensure_ascii=False, indent=2)
-                return config
-        else:
-            with open(self.config_file, "w", encoding="utf-8") as f:
-                json.dump(default_config, f, ensure_ascii=False, indent=2)
-        return default_config
-
     def is_group_enabled(self, group_id):
-        cfg = self.get_cfg()
-        enabled_groups = cfg.get("enabled_groups", [])
-        disabled_groups = cfg.get("disabled_groups", [])
+        # 直接使用官方传入的字典配置
+        enabled_groups = self.config.get("enabled_groups", [])
+        disabled_groups = self.config.get("disabled_groups", [])
         group_id_str = str(group_id)
 
-        # 规则1：如果白名单有内容，则绝对优先，完全忽略黑名单
+        # 规则1：如果白名单有内容，则绝对优先
         if enabled_groups:
             return group_id_str in enabled_groups
             
@@ -136,15 +94,15 @@ class CheckinGamePlugin(Star):
             async with session.get("https://v1.hitokoto.cn/?encode=text") as resp:
                 return await resp.text() if resp.status == 200 else "我早已踏过深渊，又岂会畏惧黑夜!"
 
-    async def fetch_image_bytes(self, url):
+    async def fetch_image_bytes(self, url, timeout=10):
         try:
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
                 'Referer': 'https://www.google.com/'
             }
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(url, timeout=10) as resp:
+            timeout_obj = aiohttp.ClientTimeout(total=timeout)
+            async with aiohttp.ClientSession(headers=headers, timeout=timeout_obj) as session:
+                async with session.get(url) as resp:
                     if resp.status == 200:
                         return await resp.read()
         except:
@@ -193,6 +151,8 @@ class CheckinGamePlugin(Star):
 
     def make_circle_avatar(self, img_bytes, size=(100, 100)):
         try:
+            if not img_bytes:
+                raise ValueError("No image bytes")
             img = PILImage.open(BytesIO(img_bytes)).convert("RGBA")
             img = img.resize(size, PILImage.Resampling.LANCZOS)
             mask = PILImage.new('L', size, 0)
@@ -202,6 +162,7 @@ class CheckinGamePlugin(Star):
             output.paste(img, (0, 0), mask)
             return output
         except:
+            # 防崩溃：生成纯色占位头像
             return PILImage.new('RGBA', size, color=(200, 200, 200, 255))
 
     def load_custom_icon(self, filename, size=(32, 32)):
@@ -240,7 +201,7 @@ class CheckinGamePlugin(Star):
         avatar_url = f"https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=640"
         
         avatar_bytes, bg_bytes = await asyncio.gather(
-            self.fetch_image_bytes(avatar_url),
+            self.fetch_image_bytes(avatar_url, timeout=3),
             self.fetch_random_bg()
         )
         
@@ -278,18 +239,20 @@ class CheckinGamePlugin(Star):
         draw = ImageDraw.Draw(canvas)
         draw.rounded_rectangle([(20, 20), (660, canvas_h - 40)], radius=30, fill=(255, 255, 255))
         
-        if avatar_bytes:
-            avatar = self.make_circle_avatar(avatar_bytes, size=(50, 50))
-            canvas.paste(avatar, (40, 40), mask=avatar)
+        avatar = self.make_circle_avatar(avatar_bytes, size=(50, 50))
+        canvas.paste(avatar, (40, 40), mask=avatar)
         
         font_name = self.get_font(22)
         font_icons = self.get_font(26)
         title_name = name[:15] + "..." if len(name) > 15 else name
         
-        if HAS_PILMOJI:
-            with Pilmoji(canvas) as pilmoji:
-                pilmoji.text((110, 52), title_name, font=font_name, fill=(38, 38, 38))
-        else:
+        try:
+            if HAS_PILMOJI:
+                with Pilmoji(canvas) as pilmoji:
+                    pilmoji.text((110, 52), title_name, font=font_name, fill=(38, 38, 38))
+            else:
+                draw.text((110, 52), title_name, font=font_name, fill=(38, 38, 38))
+        except Exception:
             draw.text((110, 52), title_name, font=font_name, fill=(38, 38, 38))
             
         draw.text((610, 40), "...", font=font_icons, fill=(38, 38, 38)) 
@@ -322,10 +285,13 @@ class CheckinGamePlugin(Star):
         font_bold = self.get_font(20)
         font_quote = self.get_font(18)
         
-        if HAS_PILMOJI:
-            with Pilmoji(canvas) as pilmoji:
-                pilmoji.text((40, current_y), f"{title_name} 签到成功！", font=font_bold, fill=(38, 38, 38))
-        else:
+        try:
+            if HAS_PILMOJI:
+                with Pilmoji(canvas) as pilmoji:
+                    pilmoji.text((40, current_y), f"{title_name} 签到成功！", font=font_bold, fill=(38, 38, 38))
+            else:
+                draw.text((40, current_y), f"{title_name} 签到成功！", font=font_bold, fill=(38, 38, 38))
+        except Exception:
             draw.text((40, current_y), f"{title_name} 签到成功！", font=font_bold, fill=(38, 38, 38))
             
         current_y += 30
@@ -347,7 +313,7 @@ class CheckinGamePlugin(Star):
     async def draw_profile_image(self, user_id, name, points, quote, rob_days):
         avatar_url = f"https://q4.qlogo.cn/headimg_dl?dst_uin={user_id}&spec=640"
         avatar_bytes, bg_bytes = await asyncio.gather(
-            self.fetch_image_bytes(avatar_url),
+            self.fetch_image_bytes(avatar_url, timeout=3),
             self.fetch_random_bg()
         )
         
@@ -384,21 +350,23 @@ class CheckinGamePlugin(Star):
         draw.rounded_rectangle([(btn_x, btn_y), (btn_x + btn_w, btn_y + btn_h)], radius=23, fill=(250, 250, 250), outline=(200, 200, 200), width=1)
         draw.text((btn_x + 30, btn_y + 10), "Follow +", font=self.get_font(18), fill=(30, 30, 30))
 
-        if avatar_bytes:
-            avatar = self.make_circle_avatar(avatar_bytes, size=(130, 130))
-            white_bg = PILImage.new('RGBA', (142, 142), (255, 255, 255, 0))
-            white_draw = ImageDraw.Draw(white_bg)
-            white_draw.ellipse([(0, 0), (142, 142)], fill=(255, 255, 255, 255))
-            white_bg.paste(avatar, (6, 6), mask=avatar)
-            canvas.paste(white_bg, (card_x + 40, card_y + 160), mask=white_bg)
+        avatar = self.make_circle_avatar(avatar_bytes, size=(130, 130))
+        white_bg = PILImage.new('RGBA', (142, 142), (255, 255, 255, 0))
+        white_draw = ImageDraw.Draw(white_bg)
+        white_draw.ellipse([(0, 0), (142, 142)], fill=(255, 255, 255, 255))
+        white_bg.paste(avatar, (6, 6), mask=avatar)
+        canvas.paste(white_bg, (card_x + 40, card_y + 160), mask=white_bg)
 
         font_name = self.get_font(36)
         title_name = name[:12] + "..." if len(name) > 12 else name
         
-        if HAS_PILMOJI:
-            with Pilmoji(canvas) as pilmoji:
-                pilmoji.text((card_x + 40, card_y + 320), title_name, font=font_name, fill=(30, 30, 30))
-        else:
+        try:
+            if HAS_PILMOJI:
+                with Pilmoji(canvas) as pilmoji:
+                    pilmoji.text((card_x + 40, card_y + 320), title_name, font=font_name, fill=(30, 30, 30))
+            else:
+                draw.text((card_x + 40, card_y + 320), title_name, font=font_name, fill=(30, 30, 30))
+        except Exception:
             draw.text((card_x + 40, card_y + 320), title_name, font=font_name, fill=(30, 30, 30))
             
         lv = (points // 10) + 1
@@ -462,7 +430,7 @@ class CheckinGamePlugin(Star):
     # ================= 排行榜生成 =================
     async def draw_leaderboard_image(self, top_users, group_id):
         row_height = 80
-        total_height = 120 + (len(top_users) * row_height)
+        total_height = 120 + (len(top_users) * row_height) + 100
         
         canvas = PILImage.new('RGB', (500, max(total_height, 200)), color=(239, 233, 217))
         draw = ImageDraw.Draw(canvas)
@@ -474,7 +442,8 @@ class CheckinGamePlugin(Star):
         
         draw.text((160, 30), "- 财富排行榜 -", font=font_title, fill=(92, 84, 70))
         
-        avatar_tasks = [self.fetch_image_bytes(f"https://q4.qlogo.cn/headimg_dl?dst_uin={uid}&spec=640") for uid, _ in top_users]
+        # 极速断路器：只等2秒，绝不让拉取头像卡死整个排行榜
+        avatar_tasks = [self.fetch_image_bytes(f"https://q4.qlogo.cn/headimg_dl?dst_uin={uid}&spec=640", timeout=2) for uid, _ in top_users]
         avatar_bytes_list = await asyncio.gather(*avatar_tasks)
         
         y_offset = 100
@@ -484,18 +453,14 @@ class CheckinGamePlugin(Star):
             rank_str = str(idx + 1)
             draw.text((40, y_offset + 20), rank_str, font=font_title, fill=(191, 165, 136))
             
-            if avatar_bytes:
-                avatar = self.make_circle_avatar(avatar_bytes, size=(50, 50))
-                canvas.paste(avatar, (90, y_offset + 7), mask=avatar)
+            avatar = self.make_circle_avatar(avatar_bytes, size=(50, 50))
+            canvas.paste(avatar, (90, y_offset + 7), mask=avatar)
                 
             display_name = data.get("name") if data.get("name") else str(uid)
             display_name = display_name[:15] + "..." if len(display_name) > 15 else display_name
             
-            if HAS_PILMOJI:
-                with Pilmoji(canvas) as pilmoji:
-                    pilmoji.text((160, y_offset + 12), display_name, font=font_name, fill=(74, 68, 58))
-            else:
-                draw.text((160, y_offset + 12), display_name, font=font_name, fill=(74, 68, 58))
+            # 🛡️ 核心防崩溃机制：排行榜强制放弃复杂的 Emoji 联网下载渲染，强行使用本地字体极速绘制
+            draw.text((160, y_offset + 12), display_name, font=font_name, fill=(74, 68, 58))
                 
             draw.text((160, y_offset + 40), f"{data['points']} 积分", font=font_score, fill=(140, 130, 113))
             
@@ -504,6 +469,13 @@ class CheckinGamePlugin(Star):
                 draw.text((405, y_offset + 24), "通缉犯", font=font_badge, fill=(255, 255, 255))
             
             y_offset += row_height
+
+        font_footer = self.get_font(18)
+        footer_color = (140, 130, 113)
+        
+        draw.line([(40, y_offset + 10), (460, y_offset + 10)], fill=(220, 210, 190), width=2)
+        draw.text((40, y_offset + 25), "10积分   可兑换潇潇和你的设定关系", font=font_footer, fill=footer_color)
+        draw.text((40, y_offset + 55), "20积分   拉潇潇一次", font=font_footer, fill=footer_color)
 
         out_path = os.path.abspath(os.path.join(self.plugin_dir, f"temp_leaderboard_{group_id}.jpg"))
         canvas.save(out_path, format='JPEG', quality=90)
@@ -613,13 +585,11 @@ class CheckinGamePlugin(Star):
         robber_data["last_rob_date"] = today_str
         self.save_data()
 
-        cfg = self.get_cfg()
-        if random.random() < cfg.get("rob_fail_rate", 0.4):
+        if random.random() < self.config.get("rob_fail_rate", 0.4):
             yield event.plain_result(f"【抢劫失败】{robber_name} 试图抢劫，但脚底打滑摔了一跤！")
             return
             
-        # === 核心经济平衡：抢劫金额受限于受害者的余额 ===
-        raw_steal = random.randint(cfg.get("rob_min_points", 1), cfg.get("rob_max_points", 8))
+        raw_steal = random.randint(self.config.get("rob_min_points", 1), self.config.get("rob_max_points", 8))
         steal_points = min(raw_steal, target_data["points"])
 
         if raw_steal > steal_points:
@@ -678,17 +648,14 @@ class CheckinGamePlugin(Star):
         robber_data = self.get_user(group_id, rob_data["robber_id"])
         hero_user_data = self.get_user(group_id, hero_id, hero_name)
         
-        cfg = self.get_cfg()
-        if random.random() < cfg.get("intervene_fail_rate", 0.4):
+        if random.random() < self.config.get("intervene_fail_rate", 0.4):
             target_data = self.get_user(group_id, rob_data["target_id"])
             
-            # 受害者被抢走积分
             actual_steal = min(rob_data["points"], target_data["points"])
             robber_data["points"] += actual_steal
             target_data["points"] = max(0, target_data["points"] - actual_steal)
             
-            # === 核心经济平衡：大侠被反抢金额受限于大侠自身余额 ===
-            hero_loss = random.randint(cfg.get("rob_min_points", 1), cfg.get("rob_max_points", 8))
+            hero_loss = random.randint(self.config.get("rob_min_points", 1), self.config.get("rob_max_points", 8))
             actual_hero_loss = min(hero_loss, hero_user_data["points"])
             
             robber_data["points"] += actual_hero_loss
@@ -712,16 +679,14 @@ class CheckinGamePlugin(Star):
             del self.active_robberies[group_id]
             
             if robber_data["is_red_name"]:
-                penalty = cfg.get("intervene_penalty_red_name", 20)
+                penalty = self.config.get("intervene_penalty_red_name", 10)
                 tag = "【红名通缉犯】"
             else:
-                penalty = cfg.get("intervene_penalty_normal", 10)
+                penalty = self.config.get("intervene_penalty_normal", 5)
                 tag = "【普通劫匪】"
                 
-            # 扣除劫匪罚金 (系统销毁)
             robber_data["points"] = max(0, robber_data["points"] - penalty)
-            # 大侠获得系统奖励 (系统增发)
-            hero_reward = cfg.get("hero_reward_points", 3)
+            hero_reward = self.config.get("hero_reward_points", 3)
             hero_user_data["points"] += hero_reward
             self.save_data()
             
@@ -748,8 +713,6 @@ class CheckinGamePlugin(Star):
         img_path = await self.draw_leaderboard_image(top_users, group_id)
         yield event.image_result(str(img_path))
 
-    # ================= 财富管理指令 =================
-
     @filter.command("财富加")
     async def add_points(self, event: AstrMessageEvent):
         group_id = str(event.message_obj.group_id)
@@ -761,9 +724,8 @@ class CheckinGamePlugin(Star):
             return
 
         sender_id = str(event.get_sender_id())
-        cfg = self.get_cfg()
         
-        if sender_id not in cfg.get("admin_qq", []):
+        if sender_id not in self.config.get("admin_qq", []):
             yield event.plain_result("🚫 权限不足！只有系统管理员可以修改积分。")
             return
             
@@ -806,9 +768,8 @@ class CheckinGamePlugin(Star):
             return
 
         sender_id = str(event.get_sender_id())
-        cfg = self.get_cfg()
         
-        if sender_id not in cfg.get("admin_qq", []):
+        if sender_id not in self.config.get("admin_qq", []):
             yield event.plain_result("🚫 权限不足！只有系统管理员可以修改积分。")
             return
             
