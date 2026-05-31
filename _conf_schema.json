@@ -9,11 +9,18 @@
         "hint": "拥有修改积分权限的管理员 QQ 号。回车添加多个。"
     },
     "enabled_groups": {
-        "description": "指定启用的群聊",
+        "description": "✅ 白名单群号 (绝对优先)",
         "type": "list",
         "item_type": "string",
         "default": [],
-        "hint": "允许使用此插件的群聊QQ号。留空则表示默认在【所有群聊】均开启。"
+        "hint": "如果填写，插件【仅】在这些群运行，且直接忽略黑名单。"
+    },
+    "disabled_groups": {
+        "description": "❌ 黑名单群号",
+        "type": "list",
+        "item_type": "string",
+        "default": [],
+        "hint": "仅在白名单为空时生效。插件将在这些群被禁用。"
     },
     "rob_fail_rate": {
         "description": "抢劫失败概率",
@@ -48,13 +55,13 @@
     "intervene_penalty_normal": {
         "description": "普通劫匪被抓罚款",
         "type": "int",
-        "default": 10,
+        "default": 5,
         "hint": "普通劫匪被行侠仗义击败后，扣除的积分数。"
     },
     "intervene_penalty_red_name": {
         "description": "通缉犯被抓罚款",
         "type": "int",
-        "default": 20,
+        "default": 10,
         "hint": "红名通缉犯被行侠仗义击败后，加倍扣除的积分数。"
     }
 }
